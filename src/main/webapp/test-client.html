@@ -1,0 +1,402 @@
+﻿<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <title>JA4 Session Shield 測試頁</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        :root {
+            color-scheme: light dark;
+            font-family: "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif;
+        }
+        body {
+            margin: 2rem;
+            line-height: 1.6;
+        }
+        h1, h2, h3 {
+            color: #1765ad;
+        }
+        label {
+            display: block;
+            margin-top: 0.75rem;
+            font-weight: 600;
+        }
+        input, textarea, button {
+            margin-top: 0.35rem;
+            padding: 0.5rem;
+            width: 100%;
+            max-width: 28rem;
+            font-size: 1rem;
+        }
+        button {
+            cursor: pointer;
+        }
+        .grid {
+            display: grid;
+            gap: 1rem;
+        }
+        .row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+        }
+        .row > * {
+            flex: 1 1 12rem;
+        }
+        pre {
+            background: rgba(23, 101, 173, 0.08);
+            padding: 1rem;
+            border-radius: 0.75rem;
+            max-width: 48rem;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        #logs {
+            height: 16rem;
+            resize: vertical;
+        }
+        .actions button {
+            width: auto;
+            min-width: 8rem;
+        }
+        small.helper {
+            display: block;
+            color: #6b6b6b;
+        }
+    </style>
+</head>
+<body>
+<h1>JA4 Session Shield 測試工具</h1>
+<p>此頁面可蒐集瀏覽器端裝置信號、產生 JA4 Header，並直接測試 <code>/api/login</code>、<code>/api/profile</code>、<code>/api/logout</code>。Persistent ID 僅保存於 <code>sessionStorage</code> 的雜湊值，重新整理即重新產生。</p>
+
+<section>
+    <h2>環境設定</h2>
+    <div class="grid">
+        <div>
+            <label for="baseUrl">API 基底 URL</label>
+            <input id="baseUrl" type="text" placeholder="http://localhost:3180/session-ja4-sample">
+        </div>
+        <div>
+            <label for="ja4Header">X-JA4-Fingerprint Header</label>
+            <input id="ja4Header" type="text" placeholder="自動帶入指紋雜湊">
+            <small class="helper">可手動修改以模擬 JA4 mismatch</small>
+        </div>
+        <div class="row actions">
+            <button id="refreshFingerprint" type="button">重新蒐集指紋</button>
+            <button id="clearLogs" type="button">清除回應紀錄</button>
+        </div>
+    </div>
+</section>
+
+<section>
+    <h2>客戶端指紋</h2>
+    <div class="grid">
+        <div>
+            <label for="clientFingerprint">Client Fingerprint (SHA-256)</label>
+            <input id="clientFingerprint" type="text" readonly>
+            <small class="helper">由各項 browser/device 訊號組成，傳給後端比對</small>
+        </div>
+        <div>
+            <label>詳細指紋訊號</label>
+            <pre id="fingerprintDetails">尚未蒐集</pre>
+        </div>
+    </div>
+</section>
+
+<section>
+    <h2>登入測試</h2>
+    <form id="loginForm">
+        <label for="username">帳號</label>
+        <input id="username" name="username" type="text" value="admin" required>
+
+        <label for="password">密碼</label>
+        <input id="password" name="password" type="password" value="admin123" required>
+
+        <button type="submit">呼叫 /api/login</button>
+    </form>
+</section>
+
+<section>
+    <h2>受保護 API 測試</h2>
+    <div class="row actions">
+        <button id="profileBtn" type="button">GET /api/profile</button>
+        <button id="logoutBtn" type="button">POST /api/logout</button>
+    </div>
+</section>
+
+<section>
+    <h2>回應紀錄</h2>
+    <textarea id="logs" readonly></textarea>
+</section>
+
+<script>
+(function () {
+    const baseUrlInput = document.getElementById('baseUrl');
+    const ja4HeaderInput = document.getElementById('ja4Header');
+    const fingerprintOutput = document.getElementById('clientFingerprint');
+    const fingerprintDetails = document.getElementById('fingerprintDetails');
+    const loginForm = document.getElementById('loginForm');
+    const profileBtn = document.getElementById('profileBtn');
+    const logoutBtn = document.getElementById('logoutBtn');
+    const refreshBtn = document.getElementById('refreshFingerprint');
+    const clearLogsBtn = document.getElementById('clearLogs');
+    const logArea = document.getElementById('logs');
+
+    let lastFingerprintHash = '';
+    let lastFingerprintSignals = {};
+
+    function getDefaultBaseUrl() {
+        const path = location.pathname.replace(/\/[^/]*$/, '');
+        return `${location.origin}${path}`;
+    }
+
+    function logMessage(title, payload, status) {
+        const timestamp = new Date().toISOString();
+        const statusText = status ? `狀態: ${status}\n` : '';
+        const body = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
+        const entry = `[${timestamp}] ${title}\n${statusText}${body}\n\n`;
+        logArea.value = entry + logArea.value;
+    }
+
+    function safeSessionStorage() {
+        try {
+            if (!window.sessionStorage) {
+                return null;
+            }
+            sessionStorage.setItem('__ja4_test__', '1');
+            sessionStorage.removeItem('__ja4_test__');
+            return sessionStorage;
+        } catch (err) {
+            return null;
+        }
+    }
+
+    async function sha256(input) {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(input);
+        const hash = await crypto.subtle.digest('SHA-256', data);
+        const bytes = Array.from(new Uint8Array(hash));
+        return bytes.map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    async function getPersistentId() {
+        const store = safeSessionStorage();
+        const key = 'ja4-demo-persistent-id-hash';
+        if (store) {
+            const existing = store.getItem(key);
+            if (existing) {
+                return existing;
+            }
+        }
+        const rawId = crypto.randomUUID();
+        const salt = `${navigator.userAgent}|${Intl.DateTimeFormat().resolvedOptions().timeZone || 'unknown'}`;
+        const hash = await sha256(`${rawId}|${salt}`);
+        if (store) {
+            store.setItem(key, hash);
+        }
+        return hash;
+    }
+
+    function getCanvasFingerprint() {
+        const canvas = document.createElement('canvas');
+        canvas.width = 240;
+        canvas.height = 60;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+            return 'unsupported';
+        }
+        ctx.textBaseline = 'top';
+        ctx.font = '14px "Segoe UI"';
+        ctx.fillStyle = '#1765ad';
+        ctx.fillRect(0, 0, 240, 30);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(navigator.userAgent, 2, 2);
+        ctx.strokeStyle = '#ff6600';
+        const uaFactor = Array.from(navigator.userAgent).reduce((sum, ch) => sum + ch.charCodeAt(0), 0);
+        const controlY = 30 + (uaFactor % 20);
+        ctx.beginPath();
+        ctx.moveTo(0, 40);
+        ctx.quadraticCurveTo(120, controlY, 240, 40);
+        ctx.stroke();
+        return canvas.toDataURL();
+    }
+
+    function getWebglFingerprint() {
+        try {
+            const canvas = document.createElement('canvas');
+            const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+            if (!gl) {
+                return 'unsupported';
+            }
+            const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+            if (!debugInfo) {
+                return 'unavailable';
+            }
+            const vendor = gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL);
+            const renderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
+            return `${vendor}__${renderer}`;
+        } catch (err) {
+            return `error:${err.message}`;
+        }
+    }
+
+    function normalizeSignals(signals) {
+        return Object.fromEntries(Object.entries(signals).map(([key, value]) => [key, String(value)]));
+    }
+
+    async function collectFingerprint() {
+        const persistentId = await getPersistentId();
+        const signals = {
+            userAgent: navigator.userAgent,
+            language: navigator.language,
+            languages: (navigator.languages || []).join(','),
+            platform: navigator.platform,
+            hardwareConcurrency: navigator.hardwareConcurrency || 'unknown',
+            deviceMemory: navigator.deviceMemory || 'unknown',
+            cookieEnabled: navigator.cookieEnabled,
+            doNotTrack: navigator.doNotTrack,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'unknown',
+            timezoneOffset: new Date().getTimezoneOffset(),
+            screenResolution: `${window.screen.width}x${window.screen.height}`,
+            screenAvailable: `${window.screen.availWidth}x${window.screen.availHeight}`,
+            colorDepth: window.screen.colorDepth,
+            pixelRatio: window.devicePixelRatio,
+            touchPoints: navigator.maxTouchPoints || 0,
+            sessionStorage: Boolean(safeSessionStorage()),
+            localStorage: typeof localStorage !== 'undefined',
+            persistentId,
+            canvasFingerprint: getCanvasFingerprint(),
+            webglFingerprint: getWebglFingerprint(),
+            plugins: navigator.plugins ? Array.from(navigator.plugins).map(p => p.name).join('|') : 'unavailable',
+            mimeTypes: navigator.mimeTypes ? Array.from(navigator.mimeTypes).map(m => m.type).join('|') : 'unavailable',
+            referrer: document.referrer || '',
+            pageUrl: location.href
+        };
+        const canonical = Object.keys(signals)
+            .sort()
+            .map(key => `${key}=${signals[key]}`)
+            .join('|');
+        const fingerprintHash = await sha256(canonical);
+        lastFingerprintSignals = signals;
+        lastFingerprintHash = fingerprintHash;
+        return { hash: fingerprintHash, canonical, signals };
+    }
+
+    function renderFingerprint(details) {
+        fingerprintOutput.value = details.hash;
+        fingerprintDetails.textContent = JSON.stringify(details.signals, null, 2);
+        if (!ja4HeaderInput.value) {
+            ja4HeaderInput.value = `sim-${details.hash.slice(0, 48)}`;
+        }
+    }
+
+    function getBaseUrl() {
+        const raw = baseUrlInput.value.trim();
+        return raw.endsWith('/') ? raw.slice(0, -1) : raw;
+    }
+
+    async function callApi(path, options = {}) {
+        const base = getBaseUrl();
+        if (!base) {
+            throw new Error('請先輸入 API 基底 URL');
+        }
+        const headers = new Headers(options.headers || {});
+        const ja4Value = ja4HeaderInput.value.trim();
+        if (ja4Value) {
+            headers.set('X-JA4-Fingerprint', ja4Value);
+        }
+        headers.set('Accept', 'application/json, text/plain, */*');
+        const init = {
+            method: options.method || 'GET',
+            headers,
+            credentials: 'include'
+        };
+        if (options.body) {
+            headers.set('Content-Type', 'application/json');
+            init.body = JSON.stringify(options.body);
+        }
+        const response = await fetch(`${base}${path}`, init);
+        const text = await response.text();
+        let parsed;
+        try {
+            parsed = JSON.parse(text);
+        } catch (err) {
+            parsed = text;
+        }
+        logMessage(`${init.method} ${path}`, parsed, `${response.status} ${response.statusText}`);
+        if (!response.ok) {
+            const error = new Error(`API 失敗: ${response.status}`);
+            error.response = parsed;
+            throw error;
+        }
+        return parsed;
+    }
+
+    async function handleLogin(event) {
+        event.preventDefault();
+        if (!lastFingerprintHash) {
+            await refreshFingerprint();
+        }
+        const username = loginForm.username.value.trim();
+        const password = loginForm.password.value;
+        try {
+            const payload = {
+                username,
+                password,
+                clientFingerprint: lastFingerprintHash,
+                clientSignals: normalizeSignals(lastFingerprintSignals)
+            };
+            const result = await callApi('/api/login', {
+                method: 'POST',
+                body: payload
+            });
+            logMessage('登入成功', result);
+        } catch (err) {
+            logMessage('登入失敗', err.response || err.message);
+        }
+    }
+
+    async function handleProfile() {
+        try {
+            const result = await callApi('/api/profile');
+            logMessage('Profile 回應', result);
+        } catch (err) {
+            logMessage('Profile 失敗', err.response || err.message);
+        }
+    }
+
+    async function handleLogout() {
+        try {
+            const result = await callApi('/api/logout', { method: 'POST' });
+            logMessage('登出回應', result || '204 No Content');
+        } catch (err) {
+            logMessage('登出失敗', err.response || err.message);
+        }
+    }
+
+    async function refreshFingerprint() {
+        const details = await collectFingerprint();
+        renderFingerprint(details);
+        logMessage('指紋更新', { hash: details.hash });
+    }
+
+    function clearLogs() {
+        logArea.value = '';
+    }
+
+    function init() {
+        baseUrlInput.value = getDefaultBaseUrl();
+        refreshFingerprint().catch(err => logMessage('指紋蒐集失敗', err.message));
+        loginForm.addEventListener('submit', handleLogin);
+        profileBtn.addEventListener('click', handleProfile);
+        logoutBtn.addEventListener('click', handleLogout);
+        refreshBtn.addEventListener('click', refreshFingerprint);
+        clearLogsBtn.addEventListener('click', clearLogs);
+    }
+
+    document.addEventListener('DOMContentLoaded', init);
+})();
+</script>
+</body>
+</html>

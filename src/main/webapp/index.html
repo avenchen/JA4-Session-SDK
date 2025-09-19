@@ -1,0 +1,37 @@
+﻿<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <title>JA4 Session Shield 範例</title>
+    <style>
+        body { font-family: "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif; margin: 3rem; line-height: 1.6; }
+        code { background-color: #f5f5f5; padding: 0.2rem 0.4rem; border-radius: 4px; }
+        pre { background-color: #f5f5f5; padding: 1rem; border-radius: 6px; overflow-x: auto; }
+        a { color: #1765ad; }
+    </style>
+</head>
+<body>
+<h1>JA4 Session Shield 範例</h1>
+<p>此應用示範如何在登入時將 JA4 TLS 指紋與瀏覽器裝置信號綁定至 Tomcat Session，並在後續 API 請求驗證指紋與裝置是否一致，以防止 Session 被盜用或在不同裝置重放。</p>
+
+<h2>測試工具</h2>
+<ul>
+    <li><a href="test-client.html">test-client.html</a>：蒐集瀏覽器指紋、產生 JA4 Header，並可直接呼叫所有 API 進行測試。</li>
+</ul>
+
+<h2>可用 API</h2>
+<ul>
+    <li><code>POST /session-ja4-sample/api/login</code>：傳入帳密與指紋，建立綁定 Session 並同步寫入 Redis。</li>
+    <li><code>GET /session-ja4-sample/api/profile</code>：需附帶登入後取得的 Cookie 與相同 JA4 指紋，才能查看目前 Session 與風險狀態。</li>
+    <li><code>POST /session-ja4-sample/api/logout</code>：登出並記錄 Session 失效事件。</li>
+</ul>
+
+<h2>Redis 事件</h2>
+<p>系統會將 Session 綁定、JA4 mismatch、IP / User-Agent 變動等資訊寫入 Redis：</p>
+<pre><code>docker compose exec redis redis-cli
+LRANGE ja4:risk-events 0 5
+</code></pre>
+
+<p>詳細說明請參考專案根目錄的 <code>README.md</code> 與 <code>session-ja4.md</code>。</p>
+</body>
+</html>

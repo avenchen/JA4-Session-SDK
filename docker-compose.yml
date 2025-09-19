@@ -1,0 +1,26 @@
+services:
+  ja4-tomcat:
+    build: .
+    container_name: ja4-tomcat
+    depends_on:
+      - redis
+    ports:
+      - "3180:8080"
+    environment:
+      - TZ=Asia/Taipei
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: ja4-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "38379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+volumes:
+  redis-data:

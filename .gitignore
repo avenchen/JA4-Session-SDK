@@ -1,0 +1,32 @@
+# Maven & Java
+/target/
+# *.war
+# *.jar
+*.class
+
+# IDE & build outputs
+.idea/
+*.iml
+.vscode/
+*.log
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Docker
+*.pid
+node_modules/
+
+# Temp files
+*.swp
+*.swo
+*.tmp
+*.bak
+
+# Local configs
+.env
+.env.local
+
+# Maven wrapper cache
+.mvn/wrapper/maven-wrapper.jar

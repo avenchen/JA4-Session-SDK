@@ -1,0 +1,6 @@
+HTTP/1.1 200 
+Set-Cookie: JSESSIONID=D9F1FA99C4FA1E2ACF900DFC8C8E06EB; Path=/session-ja4-sample; HttpOnly
+Content-Type: application/json;charset=UTF-8
+Content-Length: 329
+Date: Fri, 19 Sep 2025 05:55:40 GMT
+
